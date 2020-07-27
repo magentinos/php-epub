@@ -169,6 +169,15 @@ class EpubParser {
             }
             return $item;
         },json_decode(json_encode($opfContents->metadata->children('dc', true), JSON_UNESCAPED_UNICODE), true));
+
+        // fills description from tag description if dc:description is empty or not exists
+        if (empty($this->dcElements['description'])) {
+            $description = (string) $opfContents->metadata->description;
+
+            if (!empty($description)) {
+                $this->dcElements['description'] = $description;
+            }
+        }
     }
 
     /**
@@ -487,6 +496,32 @@ class EpubParser {
             return $result;
         }
         throw new \Exception("file not found");
+    }
+
+    /**
+     * Retrieves cover image based on meta data
+     *
+     * @return bool|string
+     *
+     * @throws \Exception
+     */
+    public function getCover()
+    {
+        $buf = $this->_getFileContentFromZipArchive($this->opfFile);
+        $opfContents = simplexml_load_string($buf);
+        $coverImage = false;
+
+        foreach ($opfContents->metadata->meta AS $item) {
+            $attr = $item->attributes();
+            $attrName = (string) $attr->name;
+
+            if ('cover' == $attrName) {
+                $attrContent = (string) $attr->content;
+                $coverImage = $this->getImage($attrContent);
+            }
+        }
+
+        return $coverImage;
     }
 
     /**
