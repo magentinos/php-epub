@@ -386,10 +386,11 @@ class EpubParser {
     /**
      * get chapter html text
      * @param $chapterId string chapterId
+     * @param $entityId int entity from outside to relate
      * @return string
      * @throws \Exception
      */
-    public function getChapter($chapterId) {
+    public function getChapter($chapterId, $entityId) {
         $result = $this->getChapterRaw($chapterId);
         $chapterHref = $this->getManifest($chapterId)['href'];
 
@@ -413,7 +414,7 @@ class EpubParser {
         }, $result);
 
         // replace images
-        $result = preg_replace_callback('/(\s(?:xlink:href|src)\s*=\s*["\']?)([^"\'\s>]*?)(["\'\s>])/', function($matches) use($chapterHref){
+        $result = preg_replace_callback('/(\s(?:xlink:href|src)\s*=\s*["\']?)([^"\'\s>]*?)(["\'\s>])/', function($matches) use ($chapterHref, $entityId) {
             $img = Util::directoryConcat($chapterHref, urldecode($matches[2]), True);
 
             $element = null;
@@ -425,7 +426,8 @@ class EpubParser {
                 }
             }
             if (!is_null($element)) {
-                return $matches[1].$this->imageWebRoot.'/'.$img.$matches[3];
+//                return $matches[1].$this->imageWebRoot.'/'.$img.$matches[3];
+                return $matches[1] . $this->imageWebRoot . $this->directorySeparator . $entityId . $this->directorySeparator . 'images' . $this->directorySeparator . basename($img) . $matches[3];
             }
             return '';
         }, $result);
@@ -501,23 +503,28 @@ class EpubParser {
     /**
      * Retrieves cover image based on meta data
      *
-     * @return bool|string
+     * @param $entityId
      *
+     * @return bool|string
      * @throws \Exception
      */
-    public function getCover()
+    public function getCover($entityId)
     {
+        $this->open();
         $buf = $this->_getFileContentFromZipArchive($this->opfFile);
-        $opfContents = simplexml_load_string($buf);
-        $coverImage = false;
+        $this->close();
 
-        foreach ($opfContents->metadata->meta AS $item) {
-            $attr = $item->attributes();
-            $attrName = (string) $attr->name;
+        $opfContents = simplexml_load_string($buf);
+        $coverImage  = false;
+
+        foreach ($opfContents->metadata->meta as $item) {
+            $attr     = $item->attributes();
+            $attrName = (string)$attr->name;
 
             if ('cover' == $attrName) {
-                $attrContent = (string) $attr->content;
-                $coverImage = $this->getImage($attrContent);
+                $attrContent = (string)$attr->content;
+                $coverHref   = $this->getManifest($attrContent)['href'];
+                $coverImage  = $this->imageWebRoot . $this->directorySeparator . $entityId . $this->directorySeparator . 'images' . $this->directorySeparator . basename($coverHref);
             }
         }
 
@@ -548,9 +555,10 @@ class EpubParser {
      * @param string $path the epub file extract destination
      * @param null|array|string $fileType file mimetype will extract or except
      * @param bool $except
+     * @param null|string $combineInDir
      * @throws \Exception
      */
-    public function extract($path, $fileType = null, $except = false) {
+    public function extract($path, $fileType = null, $except = false, $combineInDir = null) {
         if ( !is_dir($path) ) {
             throw new \Exception('invalid folder given!');
         }
@@ -590,9 +598,49 @@ class EpubParser {
             $this->_replaceExtractFile( implode($this->directorySeparator, [rtrim($path, $this->directorySeparator), $file]), $file);
         }
 
+        // move extracted files to directory and remove directory in which initially extracted
+        if (!empty($fileLimit) && (!is_null($combineInDir) && is_string($combineInDir))) {
+            $destinationDir = $path . $this->directorySeparator . $combineInDir;
+            if (!file_exists($destinationDir)) {
+                mkdir($destinationDir, 0755);
+            }
+
+            foreach ($fileLimit as $fileEntity) {
+                $sourceFile = $path . $this->directorySeparator . $fileEntity;
+                $destinationFile = $destinationDir . $this->directorySeparator . basename($fileEntity);
+
+                rename($sourceFile, $destinationFile);
+            }
+
+            if ($opfDir = $this->getOPFDir()) {
+                $extractedToDir = $path . $this->directorySeparator . $opfDir;
+
+                $this->_rrmdir($extractedToDir);
+            }
+        }
+
         $this->close();
     }
 
+    /**
+     * Recursively delete a directory and its entire contents
+     *
+     * @param $dir
+     */
+    private function _rrmdir($dir) {
+        if (is_dir($dir)) {
+            $objects = scandir($dir);
+            foreach ($objects as $object) {
+                if ($object != "." && $object != "..") {
+                    if (is_dir($dir. DIRECTORY_SEPARATOR .$object) && !is_link($dir."/".$object))
+                        $this->_rrmdir($dir. DIRECTORY_SEPARATOR .$object);
+                    else
+                        unlink($dir. DIRECTORY_SEPARATOR .$object);
+                }
+            }
+            rmdir($dir);
+        }
+    }
 
     /**
      * @param $realPath
